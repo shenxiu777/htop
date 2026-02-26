@@ -24,7 +24,6 @@ in the source distribution for its full text.
 
 #include "ClockMeter.h"
 #include "CPUMeter.h"
-#include "DateMeter.h"
 #include "DateTimeMeter.h"
 #include "FileDescriptorMeter.h"
 #include "HostnameMeter.h"
@@ -93,6 +92,24 @@ const SignalItem Platform_signals[] = {
 
 const unsigned int Platform_numberOfSignals = ARRAYSIZE(Platform_signals);
 
+enum {
+   MEMORY_CLASS_WIRED = 0,
+   MEMORY_CLASS_BUFFERS,
+   MEMORY_CLASS_ACTIVE,
+   MEMORY_CLASS_CACHE,
+   MEMORY_CLASS_INACTIVE,
+}; // N.B. the chart will display categories in this order
+
+const MemoryClass Platform_memoryClasses[] = {
+   [MEMORY_CLASS_WIRED] = { .label = "wired", .countsAsUsed = true, .countsAsCache = false, .color = MEMORY_1 },
+   [MEMORY_CLASS_BUFFERS] = { .label = "buffers", .countsAsUsed = true, .countsAsCache = false, .color = MEMORY_2 },
+   [MEMORY_CLASS_ACTIVE] = { .label = "active", .countsAsUsed = true, .countsAsCache = false, .color = MEMORY_3 },
+   [MEMORY_CLASS_CACHE] = { .label = "cache", .countsAsUsed = false, .countsAsCache = true, .color = MEMORY_4 },
+   [MEMORY_CLASS_INACTIVE] = { .label = "inactive", .countsAsUsed = false, .countsAsCache = true, .color = MEMORY_5 },
+};
+
+const unsigned int Platform_numberOfMemoryClasses = ARRAYSIZE(Platform_memoryClasses);
+
 const MeterClass* const Platform_meterTypes[] = {
    &CPUMeter_class,
    &ClockMeter_class,
@@ -105,6 +122,7 @@ const MeterClass* const Platform_meterTypes[] = {
    &SwapMeter_class,
    &TasksMeter_class,
    &UptimeMeter_class,
+   &SecondsUptimeMeter_class,
    &BatteryMeter_class,
    &HostnameMeter_class,
    &SysArchMeter_class,
@@ -120,6 +138,8 @@ const MeterClass* const Platform_meterTypes[] = {
    &RightCPUs4Meter_class,
    &LeftCPUs8Meter_class,
    &RightCPUs8Meter_class,
+   &DiskIORateMeter_class,
+   &DiskIOTimeMeter_class,
    &DiskIOMeter_class,
    &NetworkIOMeter_class,
    &FileDescriptorMeter_class,
@@ -220,22 +240,26 @@ double Platform_setCPUValues(Meter* this, unsigned int cpu) {
 
 void Platform_setMemoryValues(Meter* this) {
    const Machine* host = this->host;
+   const DragonFlyBSDMachine* fhost = (const DragonFlyBSDMachine*) host;
+   const Settings* settings = host->settings;
 
    this->total = host->totalMem;
-   this->values[MEMORY_METER_USED] = host->usedMem;
-   // this->values[MEMORY_METER_SHARED] = "shared memory, like tmpfs and shm"
-   // this->values[MEMORY_METER_COMPRESSED] = "compressed memory, like zswap on linux"
-   this->values[MEMORY_METER_BUFFERS] = host->buffersMem;
-   this->values[MEMORY_METER_CACHE] = host->cachedMem;
-   // this->values[MEMORY_METER_AVAILABLE] = "available memory"
+   if (settings->showCachedMemory) {
+      this->values[MEMORY_CLASS_WIRED]    = fhost->wiredMem;
+      this->values[MEMORY_CLASS_BUFFERS]  = fhost->buffersMem;
+   } else { // if showCachedMemory is disabled, merge buffers into the wired pages
+      this->values[MEMORY_CLASS_WIRED]    = fhost->wiredMem + fhost->buffersMem;
+      this->values[MEMORY_CLASS_BUFFERS]  = 0;
+   }
+   this->values[MEMORY_CLASS_ACTIVE]   = fhost->activeMem;
+   this->values[MEMORY_CLASS_CACHE]    = fhost->cacheMem;
+   this->values[MEMORY_CLASS_INACTIVE] = fhost->inactiveMem;
 }
 
 void Platform_setSwapValues(Meter* this) {
    const Machine* host = this->host;
    this->total = host->totalSwap;
    this->values[SWAP_METER_USED] = host->usedSwap;
-   // mtr->values[SWAP_METER_CACHE] = "pages that are both in swap and RAM, like SwapCached on linux"
-   // mtr->values[SWAP_METER_FRONTSWAP] = "pages that are accounted to swap but stored elsewhere, like frontswap on linux"
 }
 
 char* Platform_getProcessEnv(pid_t pid) {
@@ -280,6 +304,7 @@ bool Platform_getDiskIO(DiskIOData* data) {
    uint64_t bytesReadSum = 0;
    uint64_t bytesWriteSum = 0;
    uint64_t busyMsTimeSum = 0;
+   uint64_t numDisks = 0;
 
    for (int i = 0; i < dev_stats.dinfo->numdevs; i++) {
       const struct devstat* device = &dev_stats.dinfo->devices[dev_sel[i].position];
@@ -301,11 +326,13 @@ bool Platform_getDiskIO(DiskIOData* data) {
       bytesReadSum  += device->bytes_read;
       bytesWriteSum += device->bytes_written;
       busyMsTimeSum += (device->busy_time.tv_sec * 1000 + device->busy_time.tv_usec / 1000);
+      numDisks++;
    }
 
    data->totalBytesRead = bytesReadSum;
    data->totalBytesWritten = bytesWriteSum;
    data->totalMsTimeSpend = busyMsTimeSum;
+   data->numDisks = numDisks;
 
    free(dev_stats.dinfo);
    return true;

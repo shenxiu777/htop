@@ -51,11 +51,6 @@ typedef struct Machine_ {
    #endif
 
    memory_t totalMem;
-   memory_t usedMem;
-   memory_t buffersMem;
-   memory_t cachedMem;
-   memory_t sharedMem;
-   memory_t availableMem;
 
    memory_t totalSwap;
    memory_t usedSwap;
@@ -68,6 +63,8 @@ typedef struct Machine_ {
    uid_t htopUserId;
    uid_t maxUserId;  /* recently observed */
    uid_t userId;  /* selected row user ID */
+
+   pid_t maxProcessId; /* largest PID seen at runtime */
 
    size_t tableCount;
    Table **tables;

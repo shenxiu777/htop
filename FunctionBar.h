@@ -8,10 +8,10 @@ in the source distribution for its full text.
 */
 
 #include <stdbool.h>
+#include <stdint.h>
 
 
 typedef struct FunctionBar_ {
-   int size;
    char** functions;
    union {
       char** keys;
@@ -20,8 +20,6 @@ typedef struct FunctionBar_ {
    int* events;
    bool staticData;
 } FunctionBar;
-
-#define FUNCTIONBAR_MAXEVENTS 15
 
 FunctionBar* FunctionBar_newEnterEsc(const char* enter, const char* esc);
 

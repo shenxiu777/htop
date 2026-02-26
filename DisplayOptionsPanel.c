@@ -22,12 +22,14 @@ in the source distribution for its full text.
 #include "ScreensPanel.h"
 
 
-static const char* const DisplayOptionsFunctions[] = {"      ", "      ", "      ", "      ", "      ", "      ", "      ", "      ", "      ", "Done  ", NULL};
+static const char* const DisplayOptionsFunctions[] =       {"      ", "      ", "      ", "      ", "      ", "      ", "      ", "      ", "      ", "Done  ", NULL};
+
+static const char* const DisplayOptionsDecIncFunctions[] = {"      ", "      ", "      ", "      ", "      ", "      ", "Dec   ", "Inc   ", "      ", "Done  ", NULL};
 
 static void DisplayOptionsPanel_delete(Object* object) {
-   Panel* super = (Panel*) object;
    DisplayOptionsPanel* this = (DisplayOptionsPanel*) object;
-   Panel_done(super);
+   FunctionBar_delete(this->decIncBar);
+   Panel_done(&this->super);
    free(this);
 }
 
@@ -37,12 +39,14 @@ static HandlerResult DisplayOptionsPanel_eventHandler(Panel* super, int ch) {
    HandlerResult result = IGNORED;
    OptionItem* selected = (OptionItem*) Panel_getSelected(super);
 
+   if (!selected) {
+      return result;
+   }
+
    switch (ch) {
       case '\n':
       case '\r':
       case KEY_ENTER:
-      case KEY_MOUSE:
-      case KEY_RECLICK:
       case ' ':
          switch (OptionItem_kind(selected)) {
             case OPTION_ITEM_TEXT:
@@ -58,15 +62,55 @@ static HandlerResult DisplayOptionsPanel_eventHandler(Panel* super, int ch) {
          }
          break;
       case '-':
+      case KEY_F(7):
+      case KEY_RIGHTCLICK:
          if (OptionItem_kind(selected) == OPTION_ITEM_NUMBER) {
             NumberItem_decrease((NumberItem*)selected);
+            result = HANDLED;
+         } else if (OptionItem_kind(selected) == OPTION_ITEM_CHECK) {
+            CheckItem_set((CheckItem*)selected, false);
             result = HANDLED;
          }
          break;
       case '+':
+      case KEY_F(8):
          if (OptionItem_kind(selected) == OPTION_ITEM_NUMBER) {
             NumberItem_increase((NumberItem*)selected);
             result = HANDLED;
+         } else if (OptionItem_kind(selected) == OPTION_ITEM_CHECK) {
+            CheckItem_set((CheckItem*)selected, true);
+            result = HANDLED;
+         }
+         break;
+      case KEY_RECLICK:
+         if (OptionItem_kind(selected) == OPTION_ITEM_NUMBER) {
+            NumberItem_increase((NumberItem*)selected);
+            result = HANDLED;
+         } else if (OptionItem_kind(selected) == OPTION_ITEM_CHECK) {
+            CheckItem_toggle((CheckItem*)selected);
+            result = HANDLED;
+         }
+         break;
+      case KEY_UP:
+      case KEY_DOWN:
+      case KEY_NPAGE:
+      case KEY_PPAGE:
+      case KEY_HOME:
+      case KEY_END:
+         {
+            OptionItem* previous = selected;
+            Panel_onKey(super, ch);
+            selected = (OptionItem*) Panel_getSelected(super);
+            if (previous != selected) {
+               result = HANDLED;
+            }
+         }
+         /* fallthrough */
+      case EVENT_SET_SELECTED:
+         if (selected && OptionItem_kind(selected) == OPTION_ITEM_NUMBER) {
+            super->currentBar = this->decIncBar;
+         } else {
+            Panel_setDefaultBar(super);
          }
          break;
    }
@@ -74,6 +118,7 @@ static HandlerResult DisplayOptionsPanel_eventHandler(Panel* super, int ch) {
    if (result == HANDLED) {
       this->settings->changed = true;
       this->settings->lastUpdate++;
+      CRT_updateDelay();
       Header* header = this->scr->header;
       Header_calculateHeight(header);
       Header_reinit(header);
@@ -95,10 +140,12 @@ const PanelClass DisplayOptionsPanel_class = {
 
 DisplayOptionsPanel* DisplayOptionsPanel_new(Settings* settings, ScreenManager* scr) {
    DisplayOptionsPanel* this = AllocThis(DisplayOptionsPanel);
-   Panel* super = (Panel*) this;
+   Panel* super = &this->super;
+
    FunctionBar* fuBar = FunctionBar_new(DisplayOptionsFunctions, NULL, NULL);
    Panel_init(super, 1, 1, 1, 1, Class(OptionItem), true, fuBar);
 
+   this->decIncBar = FunctionBar_new(DisplayOptionsDecIncFunctions, NULL, NULL);
    this->settings = settings;
    this->scr = scr;
 
@@ -148,6 +195,7 @@ DisplayOptionsPanel* DisplayOptionsPanel_new(Settings* settings, ScreenManager* 
                                                  &(settings->showCPUTemperature)));
    Panel_add(super, (Object*) CheckItem_newByRef("- Show temperature in degree Fahrenheit instead of Celsius", &(settings->degreeFahrenheit)));
    #endif
+   Panel_add(super, (Object*) CheckItem_newByRef("Show cached memory in graph and bar modes", &(settings->showCachedMemory)));
    #ifdef HAVE_GETMOUSE
    Panel_add(super, (Object*) CheckItem_newByRef("Enable the mouse", &(settings->enableMouse)));
    #endif
@@ -158,5 +206,6 @@ DisplayOptionsPanel* DisplayOptionsPanel_new(Settings* settings, ScreenManager* 
    #ifdef HAVE_LIBHWLOC
    Panel_add(super, (Object*) CheckItem_newByRef("Show topology when selecting affinity by default", &(settings->topologyAffinity)));
    #endif
+
    return this;
 }

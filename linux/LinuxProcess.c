@@ -26,7 +26,7 @@ in the source distribution for its full text.
 #include "RowField.h"
 #include "Scheduling.h"
 #include "Settings.h"
-#include "XUtils.h"
+#include "linux/Compat.h"
 #include "linux/IOPriority.h"
 #include "linux/LinuxMachine.h"
 
@@ -34,7 +34,7 @@ in the source distribution for its full text.
 const ProcessFieldData Process_fields[LAST_PROCESSFIELD] = {
    [0] = { .name = "", .title = NULL, .description = NULL, .flags = 0, },
    [PID] = { .name = "PID", .title = "PID", .description = "Process/thread ID", .flags = 0, .pidColumn = true, },
-   [COMM] = { .name = "Command", .title = "Command ", .description = "Command line", .flags = 0, },
+   [COMM] = { .name = "Command", .title = "Command ", .description = "Command line (insert as last column only)", .flags = 0, },
    [STATE] = { .name = "STATE", .title = "S ", .description = "Process state (S sleeping, R running, D disk, Z zombie, T traced, W paging, I idle)", .flags = 0, },
    [PPID] = { .name = "PPID", .title = "PPID", .description = "Parent process ID", .flags = 0, .pidColumn = true, },
    [PGRP] = { .name = "PGRP", .title = "PGRP", .description = "Process group ID", .flags = 0, .pidColumn = true, },
@@ -138,8 +138,8 @@ void Process_delete(Object* cast) {
 [1] Note that before kernel 2.6.26 a process that has not asked for
 an io priority formally uses "none" as scheduling class, but the
 io scheduler will treat such processes as if it were in the best
-effort class. The priority within the best effort class will  be
-dynamically  derived  from  the  cpu  nice level of the process:
+effort class. The priority within the best effort class will be
+dynamically derived from the cpu nice level of the process:
 io_priority = (cpu_nice + 20) / 5. -- From ionice(1) man page
 */
 static int LinuxProcess_effectiveIOPriority(const LinuxProcess* this) {
@@ -162,7 +162,7 @@ IOPriority LinuxProcess_updateIOPriority(Process* p) {
    IOPriority ioprio = 0;
 // Other OSes masquerading as Linux (NetBSD?) don't have this syscall
 #ifdef SYS_ioprio_get
-   ioprio = syscall(SYS_ioprio_get, IOPRIO_WHO_PROCESS, Process_getPid(p));
+   ioprio = (int)syscall(SYS_ioprio_get, IOPRIO_WHO_PROCESS, Process_getPid(p));
 #endif
    LinuxProcess* this = (LinuxProcess*) p;
    this->ioPriority = ioprio;
@@ -185,7 +185,7 @@ bool LinuxProcess_rowSetIOPriority(Row* super, Arg ioprio) {
 
 bool LinuxProcess_isAutogroupEnabled(void) {
    char buf[16];
-   if (xReadfile(PROCDIR "/sys/kernel/sched_autogroup_enabled", buf, sizeof(buf)) < 0)
+   if (Compat_readfile(PROCDIR "/sys/kernel/sched_autogroup_enabled", buf, sizeof(buf)) < 0)
       return false;
    return buf[0] == '1';
 }

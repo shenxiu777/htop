@@ -12,6 +12,7 @@ in the source distribution for its full text.
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -224,7 +225,20 @@ size_t String_safeStrncpy(char* restrict dest, const char* restrict src, size_t 
    return i;
 }
 
+#ifndef HAVE_STRNLEN
+size_t strnlen(const char* str, size_t maxLen) {
+   for (size_t len = 0; len < maxLen; len++) {
+      if (!str[len]) {
+         return len;
+      }
+   }
+   return maxLen;
+}
+#endif
+
 int xAsprintf(char** strp, const char* fmt, ...) {
+   *strp = NULL;
+
    va_list vl;
    va_start(vl, fmt);
    int r = vasprintf(strp, fmt, vl);
@@ -238,6 +252,11 @@ int xAsprintf(char** strp, const char* fmt, ...) {
 }
 
 int xSnprintf(char* buf, size_t len, const char* fmt, ...) {
+   assert(len > 0);
+
+   // POSIX says snprintf() can fail if (len > INT_MAX).
+   len = MINIMUM(INT_MAX, len);
+
    va_list vl;
    va_start(vl, fmt);
    int n = vsnprintf(buf, len, fmt, vl);
@@ -272,59 +291,6 @@ char* xStrndup(const char* str, size_t len) {
       fail();
    }
    return data;
-}
-
-ATTR_ACCESS3_W(2, 3)
-static ssize_t readfd_internal(int fd, void* buffer, size_t count) {
-   if (!count) {
-      close(fd);
-      return -EINVAL;
-   }
-
-   ssize_t alreadyRead = 0;
-   count--; // reserve one for null-terminator
-
-   for (;;) {
-      ssize_t res = read(fd, buffer, count);
-      if (res == -1) {
-         if (errno == EINTR)
-            continue;
-
-         close(fd);
-         *((char*)buffer) = '\0';
-         return -errno;
-      }
-
-      if (res > 0) {
-         assert((size_t)res <= count);
-
-         buffer = ((char*)buffer) + res;
-         count -= (size_t)res;
-         alreadyRead += res;
-      }
-
-      if (count == 0 || res == 0) {
-         close(fd);
-         *((char*)buffer) = '\0';
-         return alreadyRead;
-      }
-   }
-}
-
-ssize_t xReadfile(const char* pathname, void* buffer, size_t count) {
-   int fd = open(pathname, O_RDONLY);
-   if (fd < 0)
-      return -errno;
-
-   return readfd_internal(fd, buffer, count);
-}
-
-ssize_t xReadfileat(openat_arg_t dirfd, const char* pathname, void* buffer, size_t count) {
-   int fd = Compat_openat(dirfd, pathname, O_RDONLY);
-   if (fd < 0)
-      return -errno;
-
-   return readfd_internal(fd, buffer, count);
 }
 
 ssize_t full_write(int fd, const void* buf, size_t count) {
@@ -370,6 +336,21 @@ double sumPositiveValues(const double* array, size_t count) {
          sum += array[i];
    }
    return sum;
+}
+
+/* Counts the number of digits needed to print "n" with a given base.
+   If "n" is zero, returns 1. This function expects small numbers to
+   appear often, hence it uses a O(log(n)) time algorithm. */
+size_t countDigits(size_t n, size_t base) {
+   assert(base > 1);
+   size_t res = 1;
+   for (size_t limit = base; n >= limit; limit *= base) {
+      res++;
+      if (base && limit > SIZE_MAX / base) {
+         break;
+      }
+   }
+   return res;
 }
 
 #if !defined(HAVE_BUILTIN_CTZ)

@@ -10,6 +10,7 @@ in the source distribution for its full text.
 
 #include <kstat.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <sys/param.h>
 #include <sys/resource.h>
@@ -49,8 +50,11 @@ typedef struct SolarisMachine_ {
    kstat_ctl_t* kd;
    CPUData* cpus;
 
-   int pageSize;
-   int pageSizeKB;
+   size_t pageSize;
+   size_t pageSizeKB;
+
+   memory_t usedMem;
+   memory_t lockedMem;
 
    ZfsArcStats zfs;
 } SolarisMachine;

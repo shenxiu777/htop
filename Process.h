@@ -26,7 +26,7 @@ in the source distribution for its full text.
 #define DEFAULT_HIGHLIGHT_SECS 5
 
 /* Sentinel value for an unknown niceness in Process.nice */
-#define PROCESS_NICE_UNKNOWN (-LONG_MAX)
+#define PROCESS_NICE_UNKNOWN (-INT_MAX)
 
 typedef enum Tristate_ {
    TRI_INITIAL = 0,
@@ -129,10 +129,10 @@ typedef struct Process_ {
    char* cmdline;
 
    /* End Offset in cmdline of the process basename */
-   int cmdlineBasenameEnd;
+   size_t cmdlineBasenameEnd;
 
    /* Start Offset in cmdline of the process basename */
-   int cmdlineBasenameStart;
+   size_t cmdlineBasenameStart;
 
    /* The process' "command" name */
    char* procComm;
@@ -144,7 +144,7 @@ typedef struct Process_ {
    char* procCwd;
 
    /* Offset in procExe of the process basename */
-   int procExeBasenameOffset;
+   size_t procExeBasenameOffset;
 
    /* Tells if the executable has been replaced in the filesystem since start */
    bool procExeDeleted;
@@ -165,7 +165,7 @@ typedef struct Process_ {
    long int priority;
 
    /* Nice value */
-   long int nice;
+   int nice;
 
    /* Number of threads in this process */
    long int nlwp;
@@ -307,8 +307,6 @@ void Process_init(Process* this, const struct Machine_* host);
 
 const char* Process_rowGetSortKey(Row* super);
 
-bool Process_rowSetPriority(Row* super, int priority);
-
 bool Process_rowChangePriorityBy(Row* super, Arg delta);
 
 bool Process_rowSendSignal(Row* super, Arg sgn);
@@ -328,7 +326,7 @@ int Process_compareByKey_Base(const Process* p1, const Process* p2, ProcessField
 const char* Process_getCommand(const Process* this);
 
 void Process_updateComm(Process* this, const char* comm);
-void Process_updateCmdline(Process* this, const char* cmdline, int basenameStart, int basenameEnd);
+void Process_updateCmdline(Process* this, const char* cmdline, size_t basenameStart, size_t basenameEnd);
 void Process_updateExe(Process* this, const char* exe);
 
 /* This function constructs the string that is displayed by

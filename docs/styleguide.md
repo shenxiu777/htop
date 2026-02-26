@@ -215,7 +215,7 @@ Thus when you want to use such features you should try to have an alternative av
 
 An example for this are functions like `fstatat` on Linux that extend the kernel API on modern systems.
 But even though it has been around for over a decade you are asked to provide a POSIX alternative like emulating such calls by `fstat` if this is doable.
-If an alternative can not be provided you should gracefully downgrade. That could make a feature that requires this shiny API unavailable on systems that lack support for that API. Make this case visually clear to the user.
+If an alternative cannot be provided you should gracefully downgrade. That could make a feature that requires this shiny API unavailable on systems that lack support for that API. Make this case visually clear to the user.
 
 In general, code written for the project should be able to compile on any C99-compliant compiler.
 
@@ -252,3 +252,5 @@ If you open a PR you need to follow up to resolve any comments/change requests.
 Otherwise it may be closed without merging.
 
 Rebase early. Rebase often.
+
+Please check the [AI-Assisted Contributions Policy](ai-contributions-policy.md) for requirements and mandatory disclosure in your commits and PRs if you use AI assistance in creating your work.

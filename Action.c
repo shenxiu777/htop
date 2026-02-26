@@ -27,7 +27,9 @@ in the source distribution for its full text.
 #include "ListItem.h"
 #include "Macros.h"
 #include "MainPanel.h"
+#include "MemoryMeter.h"
 #include "OpenFilesScreen.h"
+#include "Platform.h"
 #include "Process.h"
 #include "ProcessLocksScreen.h"
 #include "ProvideCurses.h"
@@ -402,19 +404,28 @@ static Htop_Reaction actionPrevScreen(State* st) {
 
 Htop_Reaction Action_setScreenTab(State* st, int x) {
    Settings* settings = st->host->settings;
-   int s = 2;
+   const int bracketWidth = (int)strlen("[]");
+
+   if (x < SCREEN_TAB_MARGIN_LEFT) {
+      return 0;
+   }
+
+   int rem = x - SCREEN_TAB_MARGIN_LEFT;
    for (unsigned int i = 0; i < settings->nScreens; i++) {
-      if (x < s) {
-         return 0;
-      }
       const char* tab = settings->screens[i]->heading;
-      int len = strlen(tab);
-      if (x <= s + len + 1) {
+      int width = rem >= bracketWidth ? (int)strnlen(tab, rem - bracketWidth + 1) : 0;
+      if (width >= rem - bracketWidth + 1) {
          settings->ssIndex = i;
          setActiveScreen(settings, st, i);
          return HTOP_UPDATE_PANELHDR | HTOP_REFRESH | HTOP_REDRAW_BAR;
       }
-      s += len + 3;
+
+      rem -= bracketWidth + width;
+      if (rem < SCREEN_TAB_COLUMN_GAP) {
+         return 0;
+      }
+
+      rem -= SCREEN_TAB_COLUMN_GAP;
    }
    return 0;
 }
@@ -634,7 +645,7 @@ static Htop_Reaction actionRedraw(ATTR_UNUSED State* st) {
 
 static Htop_Reaction actionTogglePauseUpdate(State* st) {
    st->pauseUpdate = !st->pauseUpdate;
-   return HTOP_REFRESH | HTOP_REDRAW_BAR;
+   return HTOP_REFRESH | HTOP_REDRAW_BAR | HTOP_KEEP_FOLLOWING;
 }
 
 static const struct {
@@ -741,12 +752,24 @@ static Htop_Reaction actionHelp(State* st) {
    attrset(CRT_colors[DEFAULT_COLOR]);
    mvaddstr(line++, 0, "Memory bar:    ");
    addattrstr(CRT_colors[BAR_BORDER], "[");
-   addbartext(CRT_colors[MEMORY_USED], "", "used");
-   addbartext(CRT_colors[MEMORY_SHARED], "/", "shared");
-   addbartext(CRT_colors[MEMORY_COMPRESSED], "/", "compressed");
-   addbartext(CRT_colors[MEMORY_BUFFERS_TEXT], "/", "buffers");
-   addbartext(CRT_colors[MEMORY_CACHE], "/", "cache");
-   addbartext(CRT_colors[BAR_SHADOW], "          ", "used");
+   // memory classes are OS-specific and provided in their <os>/Platform.c implementation
+   // ideal length of memory bar == 56 chars. Any length < 45 requires padding to 45.
+   // [0        1         2         3         4         5      ]
+   // [12345678901234567890123456789012345678901234567890123456]
+   // [                                            ^    5      ]
+   // [class1/class2/class3/.../classN               used/total]
+   int barTxtLen = 0;
+   for (unsigned int i = 0; i < Platform_numberOfMemoryClasses; i++) {
+      if (!st->host->settings->showCachedMemory && Platform_memoryClasses[i].countsAsCache)
+         continue; // skip reclaimable cache memory classes if "show cached memory" is not ticked
+      if (!Platform_memoryClasses[i].countsAsUsed && !Platform_memoryClasses[i].countsAsCache)
+         continue; // skip available memory class (special case for the Linux platform)
+      addbartext(CRT_colors[Platform_memoryClasses[i].color], (i == 0 ? "" : "/"), Platform_memoryClasses[i].label);
+      barTxtLen += (i == 0 ? 0 : 1) + strlen (Platform_memoryClasses[i].label);
+   }
+   for (int i = barTxtLen; i < 45; i++)
+      addattrstr(CRT_colors[BAR_SHADOW], " "); // pad to 45 chars if necessary
+   addbartext(CRT_colors[BAR_SHADOW], " ", "used");
    addbartext(CRT_colors[BAR_SHADOW], "/", "total");
    addattrstr(CRT_colors[BAR_BORDER], "]");
 
@@ -758,7 +781,7 @@ static Htop_Reaction actionHelp(State* st) {
    addbartext(CRT_colors[SWAP_CACHE], "/", "cache");
    addbartext(CRT_colors[SWAP_FRONTSWAP], "/", "frontswap");
 #else
-   addbartext(CRT_colors[SWAP_CACHE], "      ", "");
+   addbartext(CRT_colors[BAR_SHADOW], "                ", "");
 #endif
    addbartext(CRT_colors[BAR_SHADOW], "                          ", "used");
    addbartext(CRT_colors[BAR_SHADOW], "/", "total");

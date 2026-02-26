@@ -26,15 +26,15 @@ jobs:
 
     steps:
     - name: Checkout Repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Initialize CodeQL
-      uses: github/codeql-action/init@v3
+      uses: github/codeql-action/init@v4
       with:
         languages: cpp
 
     - name: Install Dependencies
-      run: sudo apt-get install --no-install-recommends libncursesw5-dev libhwloc-dev libnl-3-dev libnl-genl-3-dev libsensors4-dev libcap-dev
+      run: sudo apt-get install --no-install-recommends libncursesw5-dev libhwloc-dev libnl-3-dev libnl-genl-3-dev libsensors-dev libcap-dev
 
     - name: Bootstrap
       run: ./autogen.sh
@@ -46,4 +46,4 @@ jobs:
       run: make
 
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v3
+      uses: github/codeql-action/analyze@v4

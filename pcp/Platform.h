@@ -28,7 +28,7 @@ in the source distribution for its full text.
 #include "BatteryMeter.h"
 #include "DiskIOMeter.h"
 #include "Hashtable.h"
-#include "Meter.h"
+#include "MemoryMeter.h"
 #include "NetworkIOMeter.h"
 #include "Process.h"
 #include "ProcessLocksScreen.h"
@@ -44,6 +44,7 @@ in the source distribution for its full text.
 
 typedef struct Platform_ {
    int context;               /* PMAPI(3) context identifier */
+   bool reconnect;            /* need to reconnect the context */
    size_t totalMetrics;       /* total number of all metrics */
    const char** names;        /* name array indexed by Metric */
    pmID* pmids;               /* all known metric identifiers */
@@ -67,6 +68,10 @@ extern const unsigned int Platform_numberOfDefaultScreens;
 extern const SignalItem Platform_signals[];
 
 extern const unsigned int Platform_numberOfSignals;
+
+extern MemoryClass Platform_memoryClasses[];
+
+extern const unsigned int Platform_numberOfMemoryClasses;
 
 extern const MeterClass* const Platform_meterTypes[];
 
@@ -112,7 +117,9 @@ void Platform_getBattery(double* percent, ACPresence* isOnAC);
 
 void Platform_getHostname(char* buffer, size_t size);
 
-void Platform_getRelease(char** string);
+const char* Platform_getRelease(void);
+
+const char* Platform_getFailedState(void);
 
 enum {
    PLATFORM_LONGOPT_HOST = 128,

@@ -20,7 +20,6 @@ in the source distribution for its full text.
 #include "BatteryMeter.h"
 #include "CPUMeter.h"
 #include "ClockMeter.h"
-#include "DateMeter.h"
 #include "DateTimeMeter.h"
 #include "DiskIOMeter.h"
 #include "DynamicColumn.h"
@@ -79,6 +78,28 @@ const SignalItem Platform_signals[] = {
 
 const unsigned int Platform_numberOfSignals = ARRAYSIZE(Platform_signals);
 
+static const MemoryClass Linux_memoryClasses[] = {
+   [MEMORY_CLASS_USED] = { .label = "used", .countsAsUsed = true, .countsAsCache = false, .color = MEMORY_1 },
+   [MEMORY_CLASS_SHARED] = { .label = "shared", .countsAsUsed = true, .countsAsCache = false, .color = MEMORY_2 },
+   [MEMORY_CLASS_BUFFERS] = { .label = "compressed", .countsAsUsed = true, .countsAsCache = false, .color = MEMORY_3 },
+   [MEMORY_CLASS_CACHE] = { .label = "buffers", .countsAsUsed = false, .countsAsCache = false, .color = MEMORY_4 },
+   [MEMORY_CLASS_COMPRESSED] = { .label = "cache", .countsAsUsed = false, .countsAsCache = false, .color = MEMORY_5 },
+   [MEMORY_CLASS_AVAILABLE] = { .label = "available", .countsAsUsed = false, .countsAsCache = false, .color = MEMORY_6 },
+};
+
+static const MemoryClass Darwin_memoryClasses[] = {
+   [MEMORY_CLASS_WIRED] = { .label = "wired", .countsAsUsed = true, .countsAsCache = false, .color = MEMORY_1 },
+   [MEMORY_CLASS_SPECULATIVE] = { .label = "speculative", .countsAsUsed = true, .countsAsCache = true, .color = MEMORY_2 },
+   [MEMORY_CLASS_ACTIVE] = { .label = "active", .countsAsUsed = true, .countsAsCache = false, .color = MEMORY_3 },
+   [MEMORY_CLASS_PURGEABLE] = { .label = "purgeable", .countsAsUsed = false, .countsAsCache = true, .color = MEMORY_4 },
+   [MEMORY_CLASS_COMPRESSED] = { .label = "compressed", .countsAsUsed = true, .countsAsCache = false, .color = MEMORY_5 },
+   [MEMORY_CLASS_INACTIVE] = { .label = "inactive", .countsAsUsed = true, .countsAsCache = true, .color = MEMORY_6 },
+};
+
+MemoryClass Platform_memoryClasses[MEMORY_CLASS_LIMIT]; /* dynamically adjusted */
+
+const unsigned int Platform_numberOfMemoryClasses = ARRAYSIZE(Platform_memoryClasses);
+
 const MeterClass* const Platform_meterTypes[] = {
    &CPUMeter_class,
    &ClockMeter_class,
@@ -91,6 +112,7 @@ const MeterClass* const Platform_meterTypes[] = {
    &MemorySwapMeter_class,
    &TasksMeter_class,
    &UptimeMeter_class,
+   &SecondsUptimeMeter_class,
    &BatteryMeter_class,
    &HostnameMeter_class,
    &AllCPUsMeter_class,
@@ -114,6 +136,8 @@ const MeterClass* const Platform_meterTypes[] = {
    &ZfsArcMeter_class,
    &ZfsCompressedArcMeter_class,
    &ZramMeter_class,
+   &DiskIORateMeter_class,
+   &DiskIOTimeMeter_class,
    &DiskIOMeter_class,
    &NetworkIOMeter_class,
    &SysArchMeter_class,
@@ -127,6 +151,7 @@ static const char* Platform_metricNames[] = {
    [PCP_CONTROL_THREADS] = "proc.control.perclient.threads",
 
    [PCP_HINV_NCPU] = "hinv.ncpu",
+   [PCP_HINV_NDISK] = "hinv.ndisk",
    [PCP_HINV_CPUCLOCK] = "hinv.cpu.clock",
    [PCP_UNAME_SYSNAME] = "kernel.uname.sysname",
    [PCP_UNAME_RELEASE] = "kernel.uname.release",
@@ -158,11 +183,18 @@ static const char* Platform_metricNames[] = {
    [PCP_PERCPU_GUESTNICE] = "kernel.percpu.cpu.guest_nice",
    [PCP_MEM_TOTAL] = "mem.physmem",
    [PCP_MEM_FREE] = "mem.util.free",
+   [PCP_MEM_ACTIVE] = "mem.util.active",
    [PCP_MEM_AVAILABLE] = "mem.util.available",
    [PCP_MEM_BUFFERS] = "mem.util.bufmem",
    [PCP_MEM_CACHED] = "mem.util.cached",
+   [PCP_MEM_COMPRESSED] = "mem.util.compressed",
+   [PCP_MEM_EXTERNAL] = "mem.util.external",
+   [PCP_MEM_INACTIVE] = "mem.util.inactive",
+   [PCP_MEM_PURGEABLE] = "mem.util.purgeable",
    [PCP_MEM_SHARED] = "mem.util.shmem",
+   [PCP_MEM_SPECULATIVE] = "mem.util.speculative",
    [PCP_MEM_SRECLAIM] = "mem.util.slabReclaimable",
+   [PCP_MEM_WIRED] = "mem.util.wired",
    [PCP_MEM_SWAPCACHED] = "mem.util.swapCached",
    [PCP_MEM_SWAPTOTAL] = "mem.util.swapTotal",
    [PCP_MEM_SWAPFREE] = "mem.util.swapFree",
@@ -259,6 +291,8 @@ static const char* Platform_metricNames[] = {
    [PCP_METRIC_COUNT] = NULL
 };
 
+static void Platform_setRelease(void);
+
 #ifndef HAVE_PMLOOKUPDESCS
 /*
  * pmLookupDescs(3) exists in latest versions of libpcp (5.3.6+),
@@ -348,7 +382,12 @@ bool Platform_init(void) {
 
    if (opts.context == PM_CONTEXT_ARCHIVE) {
       gettimeofday(&pcp->offset, NULL);
+#if PMAPI_VERSION >= 3
+      struct timeval start = { opts.start.tv_sec, (suseconds_t)(opts.start.tv_nsec / 1000) };
+      pmtimevalDec(&pcp->offset, &start);
+#else
       pmtimevalDec(&pcp->offset, &opts.start);
+#endif
    }
 
    for (unsigned int i = 0; i < PCP_METRIC_COUNT; i++)
@@ -361,14 +400,15 @@ bool Platform_init(void) {
    PCPDynamicColumns_init(&pcp->columns);
    PCPDynamicScreens_init(&pcp->screens, &pcp->columns);
 
-   sts = pmLookupName(pcp->totalMetrics, pcp->names, pcp->pmids);
+   int total = (int) pcp->totalMetrics;
+   sts = pmLookupName(total, pcp->names, pcp->pmids);
    if (sts < 0) {
       fprintf(stderr, "Error: cannot lookup metric names: %s\n", pmErrStr(sts));
       Platform_done();
       return false;
    }
 
-   sts = pmLookupDescs(pcp->totalMetrics, pcp->pmids, pcp->descs);
+   sts = pmLookupDescs(total, pcp->pmids, pcp->descs);
    if (sts < 1) {
       if (sts < 0)
          fprintf(stderr, "Error: cannot lookup descriptors: %s\n", pmErrStr(sts));
@@ -385,6 +425,7 @@ bool Platform_init(void) {
    Metric_enable(PCP_PID_MAX, true);
    Metric_enable(PCP_BOOTTIME, true);
    Metric_enable(PCP_HINV_NCPU, true);
+   Metric_enable(PCP_HINV_NDISK, true);
    Metric_enable(PCP_PERCPU_SYSTEM, true);
    Metric_enable(PCP_UNAME_SYSNAME, true);
    Metric_enable(PCP_UNAME_RELEASE, true);
@@ -392,12 +433,13 @@ bool Platform_init(void) {
    Metric_enable(PCP_UNAME_DISTRO, true);
 
    /* enable metrics for all dynamic columns (including those from dynamic screens) */
-   for (size_t i = pcp->columns.offset; i < pcp->columns.offset + pcp->columns.count; i++)
-      Metric_enable(i, true);
+   Metric metric = Metric_fromId(pcp->columns.offset);
+   for (; metric < pcp->columns.offset + pcp->columns.count; metric++)
+      Metric_enable(metric, true);
 
    Metric_fetch(NULL);
 
-   for (Metric metric = 0; metric < PCP_PROC_PID; metric++)
+   for (metric = 0; metric < PCP_PROC_PID; metric++)
       Metric_enable(metric, true);
    Metric_enable(PCP_PID_MAX, false); /* needed one time only */
    Metric_enable(PCP_BOOTTIME, false);
@@ -408,7 +450,7 @@ bool Platform_init(void) {
 
    /* first sample (fetch) performed above, save constants */
    Platform_getBootTime();
-   Platform_getRelease(0);
+   Platform_setRelease();
    Platform_getMaxCPU();
    Platform_getMaxPid();
 
@@ -545,32 +587,51 @@ double Platform_setCPUValues(Meter* this, int cpu) {
    return Platform_setOneCPUValues(this, settings, phost->percpu[cpu - 1]);
 }
 
+static void Platform_setLinuxMemoryValues(double* v, const PCPMachine *host) {
+   v[MEMORY_CLASS_USED] = host->memValue[MEMORY_CLASS_USED];
+   v[MEMORY_CLASS_SHARED] = host->memValue[MEMORY_CLASS_SHARED];
+   v[MEMORY_CLASS_BUFFERS] = host->memValue[MEMORY_CLASS_BUFFERS];
+   v[MEMORY_CLASS_CACHE] = host->memValue[MEMORY_CLASS_CACHE];
+   v[MEMORY_CLASS_AVAILABLE] = host->memValue[MEMORY_CLASS_AVAILABLE];
+
+   if (host->zfs.enabled != 0) {
+      // ZFS does not shrink below the value of zfs_arc_min.
+      unsigned long long int shrinkableSize = 0;
+      if (host->zfs.size > host->zfs.min)
+         shrinkableSize = host->zfs.size - host->zfs.min;
+      v[MEMORY_CLASS_USED] -= shrinkableSize;
+      v[MEMORY_CLASS_CACHE] += shrinkableSize;
+      v[MEMORY_CLASS_AVAILABLE] += shrinkableSize;
+   }
+
+   if (host->zswap.usedZswapOrig > 0 || host->zswap.usedZswapComp > 0) {
+      v[MEMORY_CLASS_USED] -= host->zswap.usedZswapComp;
+      v[MEMORY_CLASS_COMPRESSED] = host->zswap.usedZswapComp;
+   } else {
+      v[MEMORY_CLASS_COMPRESSED] = 0;
+   }
+}
+
+static void Platform_setDarwinMemoryValues(double* v, const PCPMachine *host) {
+   v[MEMORY_CLASS_WIRED] = host->memValue[MEMORY_CLASS_WIRED];
+   v[MEMORY_CLASS_SPECULATIVE] = host->memValue[MEMORY_CLASS_SPECULATIVE];
+   v[MEMORY_CLASS_ACTIVE] = host->memValue[MEMORY_CLASS_ACTIVE];
+   v[MEMORY_CLASS_PURGEABLE] = host->memValue[MEMORY_CLASS_PURGEABLE];
+   v[MEMORY_CLASS_COMPRESSED] = host->memValue[MEMORY_CLASS_COMPRESSED];
+   v[MEMORY_CLASS_INACTIVE] = host->memValue[MEMORY_CLASS_INACTIVE];
+}
+
 void Platform_setMemoryValues(Meter* this) {
    const Machine* host = this->host;
    const PCPMachine* phost = (const PCPMachine*) host;
 
    this->total = host->totalMem;
-   this->values[MEMORY_METER_USED] = host->usedMem;
-   this->values[MEMORY_METER_SHARED] = host->sharedMem;
-   this->values[MEMORY_METER_COMPRESSED] = 0;
-   this->values[MEMORY_METER_BUFFERS] = host->buffersMem;
-   this->values[MEMORY_METER_CACHE] = host->cachedMem;
-   this->values[MEMORY_METER_AVAILABLE] = host->availableMem;
-
-   if (phost->zfs.enabled != 0) {
-      // ZFS does not shrink below the value of zfs_arc_min.
-      unsigned long long int shrinkableSize = 0;
-      if (phost->zfs.size > phost->zfs.min)
-         shrinkableSize = phost->zfs.size - phost->zfs.min;
-      this->values[MEMORY_METER_USED] -= shrinkableSize;
-      this->values[MEMORY_METER_CACHE] += shrinkableSize;
-      this->values[MEMORY_METER_AVAILABLE] += shrinkableSize;
-   }
-
-   if (phost->zswap.usedZswapOrig > 0 || phost->zswap.usedZswapComp > 0) {
-      this->values[MEMORY_METER_USED] -= phost->zswap.usedZswapComp;
-      this->values[MEMORY_METER_COMPRESSED] += phost->zswap.usedZswapComp;
-   }
+   if (phost->sys == SYSTEM_NAME_LINUX)
+      Platform_setLinuxMemoryValues(this->values, phost);
+   else if (phost->sys == SYSTEM_NAME_DARWIN)
+      Platform_setDarwinMemoryValues(this->values, phost);
+   else
+      memset(this->values, 0, sizeof(phost->memValue));
 }
 
 void Platform_setSwapValues(Meter* this) {
@@ -647,14 +708,7 @@ void Platform_getHostname(char* buffer, size_t size) {
    String_safeStrncpy(buffer, hostname, size);
 }
 
-void Platform_getRelease(char** string) {
-   /* fast-path - previously-formatted string */
-   if (string) {
-      *string = pcp->release;
-      return;
-   }
-
-   /* first call, extract just-sampled values */
+static void Platform_setRelease(void) {
    pmAtomValue sysname, release, machine, distro;
    if (!Metric_values(PCP_UNAME_SYSNAME, &sysname, 1, PM_TYPE_STRING))
       sysname.cp = NULL;
@@ -664,6 +718,12 @@ void Platform_getRelease(char** string) {
       machine.cp = NULL;
    if (!Metric_values(PCP_UNAME_DISTRO, &distro, 1, PM_TYPE_STRING))
       distro.cp = NULL;
+
+   /* set global memory class model using sysname */
+   if (sysname.cp && String_eq(sysname.cp, "Darwin"))
+      memcpy(Platform_memoryClasses, Darwin_memoryClasses, sizeof(Darwin_memoryClasses));
+   else /* default to the Linux memory categories */
+      memcpy(Platform_memoryClasses, Linux_memoryClasses, sizeof(Linux_memoryClasses));
 
    size_t length = 16; /* padded for formatting characters */
    if (sysname.cp)
@@ -706,6 +766,13 @@ void Platform_getRelease(char** string) {
    free(machine.cp);
    free(release.cp);
    free(sysname.cp);
+}
+
+const char* Platform_getRelease(void) {
+   if (pcp->release == NULL)
+      Platform_setRelease();
+
+   return pcp->release;
 }
 
 char* Platform_getProcessEnv(pid_t pid) {
@@ -753,12 +820,12 @@ bool Platform_getDiskIO(DiskIOData* data) {
       data->totalBytesWritten = value.ull;
    if (Metric_values(PCP_DISK_ACTIVE, &value, 1, PM_TYPE_U64) != NULL)
       data->totalMsTimeSpend = value.ull;
+   if (Metric_values(PCP_HINV_NDISK, &value, 1, PM_TYPE_U64) != NULL)
+      data->numDisks = value.ull;
    return true;
 }
 
 bool Platform_getNetworkIO(NetworkIOData* data) {
-   memset(data, 0, sizeof(*data));
-
    pmAtomValue value;
    if (Metric_values(PCP_NET_RECVB, &value, 1, PM_TYPE_U64) != NULL)
       data->bytesReceived = value.ull;
@@ -785,6 +852,10 @@ void Platform_getFileDescriptors(double* used, double* max) {
 void Platform_getBattery(double* level, ACPresence* isOnAC) {
    *level = NAN;
    *isOnAC = AC_ERROR;
+}
+
+const char* Platform_getFailedState(void) {
+   return pcp->reconnect ? "PMCD DOWN" : NULL;
 }
 
 void Platform_longOptionsUsage(ATTR_UNUSED const char* name) {
@@ -846,8 +917,11 @@ void Platform_gettime_realtime(struct timeval* tv, uint64_t* msec) {
 
 void Platform_gettime_monotonic(uint64_t* msec) {
    if (pcp->result) {
-      struct timeval* tv = &pcp->result->timestamp;
-      *msec = ((uint64_t)tv->tv_sec * 1000) + ((uint64_t)tv->tv_usec / 1000);
+#if PMAPI_VERSION >= 3
+      *msec = ((uint64_t)pcp->result->timestamp.tv_sec * 1000) + ((uint64_t)pcp->result->timestamp.tv_nsec / 1000000);
+#else
+      *msec = ((uint64_t)pcp->result->timestamp.tv_sec * 1000) + ((uint64_t)pcp->result->timestamp.tv_usec / 1000);
+#endif
    } else {
       *msec = 0;
    }
@@ -882,7 +956,8 @@ Hashtable* Platform_dynamicColumns(void) {
 const char* Platform_dynamicColumnName(unsigned int key) {
    PCPDynamicColumn* this = Hashtable_get(pcp->columns.table, key);
    if (this) {
-      Metric_enable(this->id, true);
+      Metric metric = Metric_fromId(this->id);
+      Metric_enable(metric, true);
       if (this->super.caption)
          return this->super.caption;
       if (this->super.heading)

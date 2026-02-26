@@ -12,12 +12,14 @@ in the source distribution for its full text.
 #include <errno.h>
 #include <fcntl.h>
 #include <langinfo.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h> // IWYU pragma: keep
 
 #include "CommandLine.h"
 #include "ProvideCurses.h"
@@ -28,14 +30,14 @@ in the source distribution for its full text.
 #include <sys/mman.h>
 #endif
 
-#if defined(HAVE_LIBUNWIND_H) && defined(HAVE_LIBUNWIND)
+#if defined(HAVE_LIBUNWIND_H) && defined(HAVE_LOCAL_UNWIND)
 # define PRINT_BACKTRACE
 # define UNW_LOCAL_ONLY
 # include <libunwind.h>
 # if defined(HAVE_DLADDR)
 #  include <dlfcn.h>
 # endif
-#elif defined(HAVE_EXECINFO_H)
+#elif defined(HAVE_EXECINFO_H) && defined(BACKTRACE_RETURN_TYPE)
 # define PRINT_BACKTRACE
 # include <execinfo.h>
 #endif
@@ -92,24 +94,33 @@ bool CRT_utf8 = false;
 
 const char* const* CRT_treeStr = CRT_treeStrAscii;
 
-static const Settings* CRT_crashSettings;
-static const int* CRT_delay;
+static const Settings* CRT_settings;
 
-const char* CRT_degreeSign;
-
-static const char* initDegreeSign(void) {
 #ifdef HAVE_LIBNCURSESW
-   if (CRT_utf8)
-      return "\xc2\xb0";
-
-   static char buffer[4];
-   // this might fail if the current locale does not support wide characters
-   int r = snprintf(buffer, sizeof(buffer), "%lc", 176);
-   if (r > 0)
-      return buffer;
+# if MB_LEN_MAX >= 3 // Minimum required to support UTF-8 BMP subset
+char CRT_degreeSign[MB_LEN_MAX * 2] = "\xc2\xb0";
+# else
+char CRT_degreeSign[MB_LEN_MAX * 2] = "";
+# endif
+#else
+char CRT_degreeSign[] = "";
 #endif
 
-   return "";
+static void initDegreeSign(void) {
+#ifdef HAVE_LIBNCURSESW
+# if MB_LEN_MAX >= 3
+   if (CRT_utf8)
+      return;
+# endif
+
+   // this might fail if the current locale does not support wide characters
+   int r = snprintf(CRT_degreeSign, sizeof(CRT_degreeSign), "%lc", 176);
+   if (r <= 0 || (size_t)r >= sizeof(CRT_degreeSign))
+      CRT_degreeSign[0] = '\0';
+#endif
+
+   // No-op
+   return;
 }
 
 const int* CRT_colors;
@@ -167,12 +178,12 @@ static int CRT_colorSchemes[LAST_COLORSCHEME][LAST_COLORELEMENT] = {
       [SWAP_FRONTSWAP] = A_BOLD | ColorPairGrayBlack,
       [GRAPH_1] = A_BOLD | ColorPair(Cyan, Black),
       [GRAPH_2] = ColorPair(Cyan, Black),
-      [MEMORY_USED] = ColorPair(Green, Black),
-      [MEMORY_BUFFERS] = A_BOLD | ColorPair(Blue, Black),
-      [MEMORY_BUFFERS_TEXT] = A_BOLD | ColorPair(Blue, Black),
-      [MEMORY_CACHE] = ColorPair(Yellow, Black),
-      [MEMORY_SHARED] = ColorPair(Magenta, Black),
-      [MEMORY_COMPRESSED] = A_BOLD | ColorPairGrayBlack,
+      [MEMORY_1] = ColorPair(Green, Black),
+      [MEMORY_2] = ColorPair(Magenta, Black),
+      [MEMORY_3] = A_BOLD | ColorPairGrayBlack,
+      [MEMORY_4] = A_BOLD | ColorPair(Blue, Black),
+      [MEMORY_5] = ColorPair(Yellow, Black),
+      [MEMORY_6] = ColorPair(Cyan, Black),
       [HUGEPAGE_1] = ColorPair(Green, Black),
       [HUGEPAGE_2] = ColorPair(Yellow, Black),
       [HUGEPAGE_3] = ColorPair(Red, Black),
@@ -285,12 +296,12 @@ static int CRT_colorSchemes[LAST_COLORSCHEME][LAST_COLORELEMENT] = {
       [SWAP_FRONTSWAP] = A_DIM,
       [GRAPH_1] = A_BOLD,
       [GRAPH_2] = A_NORMAL,
-      [MEMORY_USED] = A_BOLD,
-      [MEMORY_BUFFERS] = A_NORMAL,
-      [MEMORY_BUFFERS_TEXT] = A_NORMAL,
-      [MEMORY_CACHE] = A_NORMAL,
-      [MEMORY_SHARED] = A_NORMAL,
-      [MEMORY_COMPRESSED] = A_DIM,
+      [MEMORY_1] = A_BOLD,
+      [MEMORY_2] = A_NORMAL,
+      [MEMORY_3] = A_NORMAL,
+      [MEMORY_4] = A_NORMAL,
+      [MEMORY_5] = A_DIM,
+      [MEMORY_6] = A_NORMAL,
       [HUGEPAGE_1] = A_BOLD,
       [HUGEPAGE_2] = A_NORMAL,
       [HUGEPAGE_3] = A_REVERSE | A_BOLD,
@@ -403,12 +414,12 @@ static int CRT_colorSchemes[LAST_COLORSCHEME][LAST_COLORELEMENT] = {
       [SWAP_FRONTSWAP] = A_BOLD | ColorPair(Black, White),
       [GRAPH_1] = A_BOLD | ColorPair(Blue, White),
       [GRAPH_2] = ColorPair(Blue, White),
-      [MEMORY_USED] = ColorPair(Green, White),
-      [MEMORY_BUFFERS] = ColorPair(Cyan, White),
-      [MEMORY_BUFFERS_TEXT] = ColorPair(Cyan, White),
-      [MEMORY_CACHE] = ColorPair(Yellow, White),
-      [MEMORY_SHARED] = ColorPair(Magenta, White),
-      [MEMORY_COMPRESSED] = A_BOLD | ColorPair(Black, White),
+      [MEMORY_1] = ColorPair(Green, White),
+      [MEMORY_2] = ColorPair(Cyan, White),
+      [MEMORY_3] = ColorPair(Yellow, White),
+      [MEMORY_4] = ColorPair(Magenta, White),
+      [MEMORY_5] = A_BOLD | ColorPair(Black, White),
+      [MEMORY_6] = ColorPair(Red, White),
       [HUGEPAGE_1] = ColorPair(Green, White),
       [HUGEPAGE_2] = ColorPair(Yellow, White),
       [HUGEPAGE_3] = ColorPair(Red, White),
@@ -521,12 +532,12 @@ static int CRT_colorSchemes[LAST_COLORSCHEME][LAST_COLORELEMENT] = {
       [SWAP_FRONTSWAP] = ColorPairGrayBlack,
       [GRAPH_1] = A_BOLD | ColorPair(Cyan, Black),
       [GRAPH_2] = ColorPair(Cyan, Black),
-      [MEMORY_USED] = ColorPair(Green, Black),
-      [MEMORY_BUFFERS] = ColorPair(Cyan, Black),
-      [MEMORY_BUFFERS_TEXT] = ColorPair(Cyan, Black),
-      [MEMORY_CACHE] = ColorPair(Yellow, Black),
-      [MEMORY_SHARED] = ColorPair(Magenta, Black),
-      [MEMORY_COMPRESSED] = ColorPairGrayBlack,
+      [MEMORY_1] = ColorPair(Green, Black),
+      [MEMORY_2] = ColorPair(Cyan, Black),
+      [MEMORY_3] = ColorPair(Yellow, Black),
+      [MEMORY_4] = ColorPair(Magenta, Black),
+      [MEMORY_5] = ColorPairGrayBlack,
+      [MEMORY_6] = ColorPair(Blue, Black),
       [HUGEPAGE_1] = ColorPair(Green, Black),
       [HUGEPAGE_2] = ColorPair(Yellow, Black),
       [HUGEPAGE_3] = ColorPair(Red, Black),
@@ -639,12 +650,12 @@ static int CRT_colorSchemes[LAST_COLORSCHEME][LAST_COLORELEMENT] = {
       [SWAP_FRONTSWAP] = A_BOLD | ColorPair(Black, Blue),
       [GRAPH_1] = A_BOLD | ColorPair(Cyan, Blue),
       [GRAPH_2] = ColorPair(Cyan, Blue),
-      [MEMORY_USED] = A_BOLD | ColorPair(Green, Blue),
-      [MEMORY_BUFFERS] = A_BOLD | ColorPair(Cyan, Blue),
-      [MEMORY_BUFFERS_TEXT] = A_BOLD | ColorPair(Cyan, Blue),
-      [MEMORY_CACHE] = A_BOLD | ColorPair(Yellow, Blue),
-      [MEMORY_SHARED] = A_BOLD | ColorPair(Magenta, Blue),
-      [MEMORY_COMPRESSED] = A_BOLD | ColorPair(Black, Blue),
+      [MEMORY_1] = A_BOLD | ColorPair(Green, Blue),
+      [MEMORY_2] = A_BOLD | ColorPair(Cyan, Blue),
+      [MEMORY_3] = A_BOLD | ColorPair(Yellow, Blue),
+      [MEMORY_4] = A_BOLD | ColorPair(Magenta, Blue),
+      [MEMORY_5] = A_BOLD | ColorPair(Black, Blue),
+      [MEMORY_6] = ColorPair(Cyan, Blue),
       [HUGEPAGE_1] = A_BOLD | ColorPair(Green, Blue),
       [HUGEPAGE_2] = A_BOLD | ColorPair(Yellow, Blue),
       [HUGEPAGE_3] = A_BOLD | ColorPair(Red, Blue),
@@ -757,12 +768,12 @@ static int CRT_colorSchemes[LAST_COLORSCHEME][LAST_COLORELEMENT] = {
       [SWAP_FRONTSWAP] = ColorPair(Yellow, Black),
       [GRAPH_1] = A_BOLD | ColorPair(Green, Black),
       [GRAPH_2] = ColorPair(Green, Black),
-      [MEMORY_USED] = ColorPair(Green, Black),
-      [MEMORY_BUFFERS] = ColorPair(Blue, Black),
-      [MEMORY_BUFFERS_TEXT] = A_BOLD | ColorPair(Blue, Black),
-      [MEMORY_CACHE] = ColorPair(Yellow, Black),
-      [MEMORY_SHARED] = ColorPair(Magenta, Black),
-      [MEMORY_COMPRESSED] = ColorPair(Yellow, Black),
+      [MEMORY_1] = ColorPair(Green, Black),
+      [MEMORY_2] = ColorPair(Blue, Black),
+      [MEMORY_3] = ColorPair(Yellow, Black),
+      [MEMORY_4] = ColorPair(Magenta, Black),
+      [MEMORY_5] = ColorPair(Yellow, Black),
+      [MEMORY_6] = ColorPair(Cyan, Black),
       [HUGEPAGE_1] = ColorPair(Green, Black),
       [HUGEPAGE_2] = ColorPair(Yellow, Black),
       [HUGEPAGE_3] = ColorPair(Red, Black),
@@ -821,7 +832,121 @@ static int CRT_colorSchemes[LAST_COLORSCHEME][LAST_COLORELEMENT] = {
       [DYNAMIC_YELLOW] = ColorPair(Yellow, Black),
       [DYNAMIC_WHITE] = ColorPair(White, Black),
    },
-   [COLORSCHEME_BROKENGRAY] = { 0 } // dynamically generated.
+   [COLORSCHEME_BROKENGRAY] = { 0 }, // dynamically generated.
+   [COLORSCHEME_NORD] = {
+      [RESET_COLOR] = A_NORMAL,
+      [DEFAULT_COLOR] = A_NORMAL,
+      [FUNCTION_BAR] = ColorPair(Black, Cyan),
+      [FUNCTION_KEY] = A_NORMAL,
+      [PANEL_HEADER_FOCUS] = ColorPair(Black, Cyan),
+      [PANEL_HEADER_UNFOCUS] = ColorPair(Black, Cyan),
+      [PANEL_SELECTION_FOCUS] = ColorPair(Black, Cyan),
+      [PANEL_SELECTION_FOLLOW] = A_REVERSE,
+      [PANEL_SELECTION_UNFOCUS] = A_BOLD,
+      [FAILED_SEARCH] = A_REVERSE | A_BOLD | ColorPair(Yellow, Black),
+      [FAILED_READ] = A_BOLD | ColorPair(Yellow, Black),
+      [PAUSED] = A_BOLD | ColorPair(Black, Cyan),
+      [UPTIME] = A_BOLD,
+      [BATTERY] = A_BOLD,
+      [LARGE_NUMBER] = A_BOLD | ColorPair(Yellow, Black),
+      [METER_SHADOW] = A_BOLD | ColorPairGrayBlack,
+      [METER_TEXT] = A_NORMAL,
+      [METER_VALUE] = A_BOLD,
+      [METER_VALUE_ERROR] = A_BOLD,
+      [METER_VALUE_IOREAD] = A_NORMAL,
+      [METER_VALUE_IOWRITE] = A_NORMAL,
+      [METER_VALUE_NOTICE] = A_BOLD | ColorPair(Cyan, Black),
+      [METER_VALUE_OK] = A_NORMAL,
+      [METER_VALUE_WARN] = A_BOLD,
+      [LED_COLOR] = A_NORMAL,
+      [TASKS_RUNNING] = A_BOLD,
+      [PROCESS] = A_NORMAL,
+      [PROCESS_SHADOW] = A_BOLD | ColorPairGrayBlack,
+      [PROCESS_TAG] = A_BOLD | ColorPair(Cyan, Black),
+      [PROCESS_MEGABYTES] = A_BOLD | ColorPair(White, Black),
+      [PROCESS_GIGABYTES] = A_BOLD | ColorPair(Cyan, Black),
+      [PROCESS_BASENAME] = A_BOLD,
+      [PROCESS_TREE] = A_BOLD,
+      [PROCESS_RUN_STATE] = A_BOLD,
+      [PROCESS_D_STATE]  = A_BOLD | ColorPair(Yellow, Black),
+      [PROCESS_HIGH_PRIORITY] = A_BOLD,
+      [PROCESS_LOW_PRIORITY] = A_BOLD | ColorPairGrayBlack,
+      [PROCESS_NEW] = A_BOLD,
+      [PROCESS_TOMB] = A_BOLD | ColorPairGrayBlack,
+      [PROCESS_PRIV] = A_BOLD | ColorPair(Cyan, Black),
+      [BAR_BORDER] = A_BOLD,
+      [BAR_SHADOW] = A_BOLD | ColorPairGrayBlack,
+      [SWAP] = A_BOLD,
+      [SWAP_CACHE] = A_NORMAL,
+      [SWAP_FRONTSWAP] = A_BOLD | ColorPairGrayBlack,
+      [GRAPH_1]  = A_BOLD,
+      [GRAPH_2] = A_NORMAL,
+      [MEMORY_1] = A_BOLD | ColorPair(Yellow, Black),
+      [MEMORY_2] = A_NORMAL,
+      [MEMORY_3] = A_NORMAL,
+      [MEMORY_4] = A_NORMAL,
+      [MEMORY_5] = A_BOLD | ColorPairGrayBlack,
+      [MEMORY_6] = A_NORMAL,
+      [HUGEPAGE_1] = A_BOLD,
+      [HUGEPAGE_2] = A_NORMAL,
+      [HUGEPAGE_3] = A_BOLD | ColorPair(Cyan, Black),
+      [HUGEPAGE_4] = A_BOLD | ColorPair(Cyan, Black),
+      [LOAD_AVERAGE_FIFTEEN] = A_BOLD | ColorPairGrayBlack,
+      [LOAD_AVERAGE_FIVE] = A_NORMAL,
+      [LOAD_AVERAGE_ONE] = A_BOLD,
+      [LOAD] = A_BOLD,
+      [HELP_BOLD] = A_BOLD,
+      [HELP_SHADOW] = A_BOLD | ColorPairGrayBlack,
+      [CLOCK] = A_BOLD,
+      [DATE] = A_BOLD,
+      [DATETIME] = A_BOLD,
+      [CHECK_BOX] = A_BOLD,
+      [CHECK_MARK] = A_NORMAL,
+      [CHECK_TEXT] = A_NORMAL,
+      [HOSTNAME] = A_BOLD | ColorPair(Cyan, Black),
+      [CPU_NICE] = A_NORMAL,
+      [CPU_NICE_TEXT] = A_NORMAL,
+      [CPU_NORMAL] = A_BOLD,
+      [CPU_SYSTEM] = A_BOLD | ColorPair(Yellow, Black),
+      [CPU_IOWAIT] = A_NORMAL,
+      [CPU_IRQ] = A_BOLD,
+      [CPU_SOFTIRQ] = A_BOLD,
+      [CPU_STEAL] = A_BOLD | ColorPairGrayBlack,
+      [CPU_GUEST] = A_BOLD | ColorPairGrayBlack,
+      [GPU_ENGINE_1] = A_BOLD,
+      [GPU_ENGINE_2] = A_NORMAL,
+      [GPU_ENGINE_3] = A_BOLD | ColorPair(Cyan, Black),
+      [GPU_ENGINE_4] = A_BOLD | ColorPair(Cyan, Black),
+      [GPU_RESIDUE] = A_BOLD,
+      [PANEL_EDIT] = A_BOLD,
+      [SCREENS_OTH_BORDER] = A_BOLD | ColorPairGrayBlack,
+      [SCREENS_OTH_TEXT]  = A_BOLD | ColorPairGrayBlack,
+      [SCREENS_CUR_BORDER] = ColorPair(Black, Cyan),
+      [SCREENS_CUR_TEXT] = ColorPair(Black, Cyan),
+      [PRESSURE_STALL_THREEHUNDRED] = A_BOLD | ColorPairGrayBlack,
+      [PRESSURE_STALL_SIXTY] = A_NORMAL,
+      [PRESSURE_STALL_TEN] = A_BOLD,
+      [FILE_DESCRIPTOR_USED] = A_BOLD,
+      [FILE_DESCRIPTOR_MAX] = A_BOLD | ColorPair(Yellow, Black),
+      [ZFS_MFU] = A_NORMAL,
+      [ZFS_MRU] = A_NORMAL,
+      [ZFS_ANON] = A_BOLD | ColorPairGrayBlack,
+      [ZFS_HEADER] = A_BOLD,
+      [ZFS_OTHER] = A_BOLD | ColorPairGrayBlack,
+      [ZFS_COMPRESSED] = A_BOLD,
+      [ZFS_RATIO] = A_BOLD,
+      [ZRAM_COMPRESSED] = A_NORMAL,
+      [ZRAM_UNCOMPRESSED] = A_NORMAL,
+      [DYNAMIC_GRAY] = A_BOLD | ColorPairGrayBlack,
+      [DYNAMIC_DARKGRAY] = A_BOLD | ColorPairGrayBlack,
+      [DYNAMIC_RED] = A_BOLD | ColorPair(Yellow, Black),
+      [DYNAMIC_GREEN] = A_BOLD,
+      [DYNAMIC_BLUE] = A_BOLD | ColorPair(Cyan, Black),
+      [DYNAMIC_CYAN] = A_BOLD | ColorPair(Cyan, Black),
+      [DYNAMIC_MAGENTA] = A_BOLD,
+      [DYNAMIC_YELLOW] = A_BOLD | ColorPair(Yellow, Black),
+      [DYNAMIC_WHITE] = A_BOLD,
+   },
 };
 
 static bool CRT_retainScreenOnExit = false;
@@ -836,7 +961,7 @@ ATTR_NORETURN
 static void CRT_handleSIGTERM(int sgn) {
    CRT_done();
 
-   if (!CRT_crashSettings->changed)
+   if (!CRT_settings->changed)
       _exit(0);
 
    const char* signal_str = strsignal(sgn);
@@ -959,7 +1084,11 @@ static void CRT_installSignalHandlers(void) {
    sigaction(SIGFPE, &act, &old_sig_handler[SIGFPE]);
    sigaction(SIGILL, &act, &old_sig_handler[SIGILL]);
    sigaction(SIGBUS, &act, &old_sig_handler[SIGBUS]);
+#ifndef HTOP_PCP
    sigaction(SIGPIPE, &act, &old_sig_handler[SIGPIPE]);
+#else
+   signal(SIGPIPE, SIG_IGN);
+#endif
    sigaction(SIGSYS, &act, &old_sig_handler[SIGSYS]);
    sigaction(SIGABRT, &act, &old_sig_handler[SIGABRT]);
 
@@ -991,9 +1120,9 @@ void CRT_resetSignalHandlers(void) {
 void CRT_setMouse(bool enabled) {
    if (enabled) {
 #if NCURSES_MOUSE_VERSION > 1
-      mousemask(BUTTON1_RELEASED | BUTTON4_PRESSED | BUTTON5_PRESSED, NULL);
+      mousemask(BUTTON1_RELEASED | BUTTON3_RELEASED | BUTTON4_PRESSED | BUTTON5_PRESSED, NULL);
 #else
-      mousemask(BUTTON1_RELEASED, NULL);
+      mousemask(BUTTON1_RELEASED | BUTTON3_RELEASED, NULL);
 #endif
    } else {
       mousemask(0, NULL);
@@ -1006,22 +1135,29 @@ static bool terminalSupportsDefinedKeys(const char* termType) {
       return false;
    }
 
+   #define IS_END_OR_DASH(ch) ((ch) == '-' || (ch) == '\0')
+
    switch (termType[0]) {
    case 'a':
       if (String_eq(termType, "alacritty")) {
          return true;
       }
       break;
-   case 's':
-      if (termType[1] == 't' && (termType[2] == '-' || !termType[2])) {
+   case 'f':
+      if (String_eq(termType, "foot")) {
          return true;
       }
-      if (String_eq(termType, "screen")) {
+      break;
+   case 's':
+      if (termType[1] == 't' && IS_END_OR_DASH(termType[2])) {
+         return true;
+      }
+      if (String_startsWith(termType, "screen") && IS_END_OR_DASH(termType[6])) {
          return true;
       }
       break;
    case 't':
-      if (String_eq(termType, "tmux")) {
+      if (String_startsWith(termType, "tmux") && IS_END_OR_DASH(termType[4])) {
          return true;
       }
       break;
@@ -1031,7 +1167,7 @@ static bool terminalSupportsDefinedKeys(const char* termType) {
       }
       break;
    case 'x':
-      if (String_eq(termType, "xterm")) {
+      if (String_startsWith(termType, "xterm") && IS_END_OR_DASH(termType[5])) {
          return true;
       }
       break;
@@ -1055,17 +1191,14 @@ void CRT_init(const Settings* settings, bool allowUnicode, bool retainScreenOnEx
 
    redirectStderr();
    noecho();
-   CRT_crashSettings = settings;
-   CRT_delay = &(settings->delay);
-   CRT_colors = CRT_colorSchemes[settings->colorScheme];
-   CRT_colorScheme = settings->colorScheme;
+   CRT_settings = settings;
 
    for (int i = 0; i < LAST_COLORELEMENT; i++) {
       unsigned int color = CRT_colorSchemes[COLORSCHEME_DEFAULT][i];
       CRT_colorSchemes[COLORSCHEME_BROKENGRAY][i] = color == (A_BOLD | ColorPairGrayBlack) ? ColorPair(White, Black) : color;
    }
 
-   halfdelay(*CRT_delay);
+   halfdelay(settings->delay);
    nonl();
    intrflush(stdscr, false);
    keypad(stdscr, true);
@@ -1125,9 +1258,8 @@ IGNORE_WCASTQUAL_END
    CRT_installSignalHandlers();
 
    use_default_colors();
-   if (!has_colors())
-      CRT_colorScheme = COLORSCHEME_MONOCHROME;
-   CRT_setColors(CRT_colorScheme);
+
+   CRT_setColors(has_colors() ? settings->colorScheme : COLORSCHEME_MONOCHROME);
 
 #ifdef HAVE_LIBNCURSESW
    if (allowUnicode && String_eq(nl_langinfo(CODESET), "UTF-8")) {
@@ -1147,7 +1279,7 @@ IGNORE_WCASTQUAL_END
 
    CRT_setMouse(settings->enableMouse);
 
-   CRT_degreeSign = initDegreeSign();
+   initDegreeSign();
 }
 
 void CRT_done(void) {
@@ -1180,7 +1312,7 @@ int CRT_readKey(void) {
    cbreak();
    nodelay(stdscr, FALSE);
    int ret = getch();
-   halfdelay(*CRT_delay);
+   halfdelay(CRT_settings->delay);
    return ret;
 }
 
@@ -1191,10 +1323,14 @@ void CRT_disableDelay(void) {
 }
 
 void CRT_enableDelay(void) {
-   halfdelay(*CRT_delay);
+   halfdelay(CRT_settings->delay);
 }
 
 void CRT_setColors(int colorScheme) {
+   if (colorScheme >= LAST_COLORSCHEME || colorScheme < 0) {
+      colorScheme = COLORSCHEME_DEFAULT;
+   }
+
    CRT_colorScheme = colorScheme;
 
    for (short int i = 0; i < 8; i++) {
@@ -1217,7 +1353,7 @@ void CRT_setColors(int colorScheme) {
 
 #ifdef PRINT_BACKTRACE
 static void print_backtrace(void) {
-#if defined(HAVE_LIBUNWIND_H) && defined(HAVE_LIBUNWIND)
+#if defined(HAVE_LIBUNWIND_H) && defined(HAVE_LOCAL_UNWIND)
    unw_context_t context;
    unw_getcontext(&context);
 
@@ -1259,11 +1395,17 @@ static void print_backtrace(void) {
       snprintf(err_buf, sizeof(err_buf), "%2u: %#14lx  %s  (%s+%#lx)  [%p]%s\n", item++, pc, fname, symbolName, offset, ptr, frame);
       full_write_str(STDERR_FILENO, err_buf);
    }
-#elif defined(HAVE_EXECINFO_H)
+#elif defined(HAVE_EXECINFO_H) && defined(BACKTRACE_RETURN_TYPE)
    void* backtraceArray[256];
 
-   size_t size = backtrace(backtraceArray, ARRAYSIZE(backtraceArray));
-   backtrace_symbols_fd(backtraceArray, size, STDERR_FILENO);
+   BACKTRACE_RETURN_TYPE nptrs = backtrace(backtraceArray, ARRAYSIZE(backtraceArray));
+   if (nptrs > 0) {
+      backtrace_symbols_fd(backtraceArray, nptrs, STDERR_FILENO);
+   } else {
+      full_write_str(STDERR_FILENO,
+         "[No backtrace information available from libc]\n"
+      );
+   }
 #else
 #error No implementation for print_backtrace()!
 #endif
@@ -1312,7 +1454,7 @@ void CRT_handleSIGSEGV(int signal) {
    full_write_str(STDERR_FILENO,
       "Setting information:\n"
       "--------------------\n");
-   Settings_write(CRT_crashSettings, true);
+   Settings_write(CRT_settings, true);
    full_write_str(STDERR_FILENO, "\n\n");
 
 #ifdef PRINT_BACKTRACE

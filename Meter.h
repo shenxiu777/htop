@@ -14,6 +14,7 @@ in the source distribution for its full text.
 
 #include "ListItem.h"
 #include "Machine.h"
+#include "Macros.h"
 #include "MeterMode.h"
 #include "Object.h"
 
@@ -47,13 +48,13 @@ in the source distribution for its full text.
 struct Meter_;
 typedef struct Meter_ Meter;
 
-typedef void(*Meter_Init)(Meter*);
-typedef void(*Meter_Done)(Meter*);
-typedef void(*Meter_UpdateMode)(Meter*, MeterModeId);
-typedef void(*Meter_UpdateValues)(Meter*);
-typedef void(*Meter_Draw)(Meter*, int, int, int);
-typedef const char* (*Meter_GetCaption)(const Meter*);
-typedef void(*Meter_GetUiName)(const Meter*, char*, size_t);
+typedef ATTR_NONNULL void (*Meter_Init)(Meter*);
+typedef ATTR_NONNULL void (*Meter_Done)(Meter*);
+typedef ATTR_NONNULL void (*Meter_UpdateMode)(Meter*, MeterModeId);
+typedef ATTR_NONNULL void (*Meter_UpdateValues)(Meter*);
+typedef ATTR_NONNULL void (*Meter_Draw)(Meter*, int, int, int);
+typedef ATTR_NONNULL const char* (*Meter_GetCaption)(const Meter*);
+typedef ATTR_NONNULL ATTR_ACCESS3_W(2, 3) void (*Meter_GetUiName)(const Meter*, char*, size_t);
 
 typedef struct MeterClass_ {
    const ObjectClass super;
@@ -74,6 +75,12 @@ typedef struct MeterClass_ {
    const char* const description;          /* optional meter description in header setup menu */
    const uint8_t maxItems;
    const bool isMultiColumn;               /* whether the meter draws multiple sub-columns (defaults to false) */
+
+   /* Specifies how the meter is rendered in bar or graph mode:
+      true: a percent bar or graph with 'total' representing 100% or maximum.
+      false: the meter has no definite maximum; 'total' represents initial
+        maximum value while actual maximum is updated automatically. */
+   const bool isPercentChart;
 } MeterClass;
 
 #define As_Meter(this_)                ((const MeterClass*)((this_)->super.klass))
@@ -94,6 +101,7 @@ typedef struct MeterClass_ {
 #define Meter_name(this_)              As_Meter(this_)->name
 #define Meter_uiName(this_)            As_Meter(this_)->uiName
 #define Meter_isMultiColumn(this_)     As_Meter(this_)->isMultiColumn
+#define Meter_isPercentChart(this_)    As_Meter(this_)->isPercentChart
 
 typedef struct GraphData_ {
    struct timeval time;

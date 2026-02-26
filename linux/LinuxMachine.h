@@ -8,6 +8,7 @@ in the source distribution for its full text.
 */
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "Machine.h"
 #include "linux/ZramStats.h"
@@ -48,6 +49,10 @@ typedef struct CPUData_ {
 
    #ifdef HAVE_SENSORS_SENSORS_H
    double temperature;
+
+   int physicalID;      /* different for each CPU socket */
+   int coreID;          /* same for hyperthreading */
+   int ccdID;           /* same for each AMD chiplet */
    #endif
 
    bool online;
@@ -63,8 +68,8 @@ typedef struct LinuxMachine_ {
    Machine super;
 
    long jiffies;
-   int pageSize;
-   int pageSizeKB;
+   size_t pageSize;
+   size_t pageSizeKB;
 
    /* see Linux kernel source for further detail, fs/proc/stat.c */
    unsigned int runningTasks;   /* procs_running from /proc/stat */
@@ -72,12 +77,21 @@ typedef struct LinuxMachine_ {
 
    double period;
 
+   memory_t cachedMem;
+   memory_t sharedMem;
+   memory_t usedMem;
+   memory_t buffersMem;
+   memory_t availableMem;
+
    CPUData* cpuData;
+
+   #ifdef HAVE_SENSORS_SENSORS_H
+   int maxPhysicalID;
+   int maxCoreID;
+   #endif
 
    memory_t totalHugePageMem;
    memory_t usedHugePageMem[HTOP_HUGEPAGE_COUNT];
-
-   memory_t availableMem;
 
    unsigned long long int prevGpuTime, curGpuTime;  /* total absolute GPU time in nano seconds */
    GPUEngineData* gpuEngineData;

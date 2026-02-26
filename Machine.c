@@ -79,9 +79,11 @@ void Machine_populateTablesFromSettings(Machine* this, Settings* settings, Table
 
    for (size_t i = 0; i < settings->nScreens; i++) {
       ScreenSettings* ss = settings->screens[i];
+
+      if (!ss->table)
+         ss->table = processTable;
+
       Table* table = ss->table;
-      if (!table)
-         table = ss->table = processTable;
       if (i == 0)
          this->activeTable = table;
 
@@ -107,7 +109,9 @@ void Machine_scanTables(Machine* this) {
       this->monotonicMs = 1;
       firstScanDone = true;
    }
-   assert(this->monotonicMs > this->prevMonotonicMs);
+   if (this->monotonicMs <= this->prevMonotonicMs) {
+      return;
+   }
 
    this->maxUserId = 0;
    Row_resetFieldWidths();
@@ -126,4 +130,5 @@ void Machine_scanTables(Machine* this) {
    }
 
    Row_setUidColumnWidth(this->maxUserId);
+   Row_setPidColumnWidth(this->maxProcessId);
 }
